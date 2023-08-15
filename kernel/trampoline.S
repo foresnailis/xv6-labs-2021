@@ -38,6 +38,9 @@ uservec:
         sd t2, 88(a0)
         sd s0, 96(a0)
         sd s1, 104(a0)
+
+        # 此处，没有保存a0，这是因为原本a0的值在sscratch中，现在的a0保存trapframe地址
+
         sd a1, 120(a0)
         sd a2, 128(a0)
         sd a3, 136(a0)

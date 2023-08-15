@@ -6,6 +6,45 @@
 #include "memlayout.h"
 #include "spinlock.h"
 #include "proc.h"
+#include "sysinfo.h"
+
+uint64
+getFreeMem(void);
+
+uint64
+getProcUsed(void);
+
+uint64
+sys_sysinfo(void)
+{
+  uint64 info;
+  struct sysinfo kinfo; 
+  struct proc *p = myproc();
+
+  if(argaddr(0, &info) < 0){
+    //获取系统调用参数，用户空间中结构体变量的地址
+    return -1;
+  }
+
+  kinfo.freemem = getFreeMem();
+  kinfo.nproc = getProcUsed();
+  
+  if(copyout(p->pagetable, info, (char*)&kinfo, sizeof(kinfo)) < 0){
+    //从内核地址空间中将info内容复制到用户地址空间中去
+    return -1;
+  }
+  return 0;
+}
+
+uint64
+sys_trace(){
+  uint32 mask;
+  if(argint(0, (int*)&mask) < 0)
+    return -1;
+  struct proc *p = myproc();
+  p->trace_mask = mask;
+  return 0;
+}
 
 uint64
 sys_exit(void)

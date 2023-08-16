@@ -261,6 +261,45 @@ uvmdealloc(pagetable_t pagetable, uint64 oldsz, uint64 newsz)
   return newsz;
 }
 
+
+void print_level(int level)
+{
+   for (int i = 0; i < level; i++)
+    {
+        printf(".. ");
+    }
+}
+
+void vmprint_recursive(pagetable_t pagetable,int level)
+{
+  // there are 2^9 = 512 PTEs in a page table.
+  for(int i = 0; i < 512; i++)
+  {
+    pte_t pte = pagetable[i];
+    if((pte & PTE_V) && (pte & (PTE_R|PTE_W|PTE_X)) == 0)
+    {
+      //这里表示有效的PTE，但不是叶子PTE
+      uint64 child = PTE2PA(pte);
+      print_level(level);
+      printf("..%d: pte %p pa %p\n",i,pte,child);
+      vmprint_recursive((pagetable_t)child,level+1);
+    } 
+    else if(pte & PTE_V)
+    {
+      //这里表示三级页表的PTE
+      uint64 pa = PTE2PA(pte);
+      print_level(level);
+      printf("..%d: pte %p pa %p\n",i,pte,pa);
+    }
+  }
+}
+
+void vmprint(pagetable_t pagetable)
+{
+  printf("page table %p\n",pagetable);
+  vmprint_recursive(pagetable,0);
+}
+
 // Recursively free page-table pages.
 // All leaf mappings must already have been removed.
 void

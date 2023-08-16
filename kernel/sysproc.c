@@ -81,6 +81,45 @@ int
 sys_pgaccess(void)
 {
   // lab pgtbl: your code here.
+  uint64 start_va;
+  if(argaddr(0, &start_va) < 0)
+    return -1;
+
+  int page_num;
+  if(argint(1, &page_num) < 0)
+    return -1;
+
+  if (page_num > 64)
+  {
+    panic("pgaccess: too much pages");
+    //使用panic，引出异常
+    return -1;
+  }
+
+  uint64 result_va;
+  if(argaddr(2, &result_va) < 0)
+    return -1;
+
+  unsigned int bitmask = 0;
+  int cur_bitmask = 1;
+  int count = 0;
+  pte_t *pte;
+  struct proc *p = myproc();
+
+  for (; count < page_num; count++)
+  {
+    if ((pte = walk(p->pagetable, start_va, 0)) == 0)
+      panic("pgaccess: pte should exist");
+    if ((*pte & PTE_A))
+    {
+      bitmask = bitmask | (cur_bitmask<<count);
+      *pte = *pte & ~PTE_A;
+      //清除PTE_A位
+    }
+    start_va += PGSIZE;
+  }
+  copyout(p->pagetable,result_va,(char*)&bitmask,sizeof(bitmask));
+
   return 0;
 }
 #endif

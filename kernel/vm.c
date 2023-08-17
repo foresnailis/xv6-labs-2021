@@ -6,6 +6,7 @@
 #include "defs.h"
 #include "fs.h"
 
+#define PGROUNDDOWN(a) (((a)) & ~(PGSIZE-1))
 /*
  * the kernel's page table.
  */
@@ -303,7 +304,7 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
   pte_t *pte;
   uint64 pa, i;
   uint flags;
-  char *mem;
+  // char *mem;
 
   for(i = 0; i < sz; i += PGSIZE){
     if((pte = walk(old, i, 0)) == 0)
@@ -312,19 +313,31 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
       panic("uvmcopy: page not present");
     pa = PTE2PA(*pte);
     flags = PTE_FLAGS(*pte);
-    if((mem = kalloc()) == 0)
-      goto err;
-    memmove(mem, (char*)pa, PGSIZE);
-    if(mappages(new, i, PGSIZE, (uint64)mem, flags) != 0){
-      kfree(mem);
-      goto err;
+   // 仅对可写页面设置COW标记
+    if(flags & PTE_W) {
+      flags = (flags | RSW) & ~PTE_W;
+      *pte = PA2PTE(pa) | flags;
+      //设置有效位
     }
+
+
+    // if((mem = kalloc()) == 0)
+    //   goto err;
+    // memmove(mem, (char*)pa, PGSIZE);
+    if(mappages(new, i, PGSIZE, (uint64)pa, flags) != 0){
+      uvmunmap(new, 0, i / PGSIZE, 1);
+      return -1;  
+      //若映射出错，直接退出
+      // kfree(mem);
+      // goto err;
+    }
+    cntADD((char*)pa);
   }
   return 0;
 
- err:
-  uvmunmap(new, 0, i / PGSIZE, 1);
-  return -1;
+//  err:
+//   uvmunmap(new, 0, i / PGSIZE, 1);
+//   return -1;
 }
 
 // mark a PTE invalid for user access.
@@ -351,6 +364,29 @@ copyout(pagetable_t pagetable, uint64 dstva, char *src, uint64 len)
   while(len > 0){
     va0 = PGROUNDDOWN(dstva);
     pa0 = walkaddr(pagetable, va0);
+   
+    if(IScowpage(pagetable,va0)==0){
+        //如果是COW页面，需要进行处理
+      pte_t* pte = walk(pagetable, va0, 0);  // 获取对应的PTE
+      if(cntGET((char*)pa0)==1){
+        
+        *pte |= PTE_W;
+        *pte &= ~RSW;
+      }
+      else{
+        char* mem = kalloc();
+        memmove(mem, (char*)pa0, PGSIZE);
+
+        // 先清除PTE_V，否则在mappagges中会判定为remap
+        *pte &= ~PTE_V;
+        mappages(pagetable, va0, PGSIZE, (uint64)mem, (PTE_FLAGS(*pte) | PTE_W) & ~RSW);
+
+        // 将原来的物理内存引用计数减1
+        kfree((char*)PGROUNDDOWN(pa0));
+        pa0= (uint64)mem;
+      }
+    }
+    
     if(pa0 == 0)
       return -1;
     n = PGSIZE - (dstva - va0);

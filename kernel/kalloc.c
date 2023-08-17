@@ -23,10 +23,41 @@ struct {
   struct run *freelist;
 } kmem;
 
+struct cnt_struct {
+  struct spinlock lock;
+  int cnt[PHYSTOP / PGSIZE];  
+  // 引用计数，从地址零到PHYSTOP；实际上包括了内核页面、设备节点
+} cnt_s;
+
+
+int IScowpage(pagetable_t pagetable, uint64 va) {
+  if(va >= MAXVA)
+    return -1;
+  pte_t* pte = walk(pagetable, va, 0);
+  if(pte == 0)
+    return -1;
+  if((*pte & PTE_V) == 0)
+    return -1;
+  return (*pte & RSW ? 0 : -1);
+}
+
+int cntADD(void* pa){
+  acquire(&cnt_s.lock);
+  ++cnt_s.cnt[(uint64)pa / PGSIZE];
+  release(&cnt_s.lock);
+  return 0;
+}
+
+int cntGET(void* pa) {
+  return cnt_s.cnt[(uint64)pa / PGSIZE];
+}
+
+
 void
 kinit()
 {
   initlock(&kmem.lock, "kmem");
+  initlock(&cnt_s.lock, "cnt_s");
   freerange(end, (void*)PHYSTOP);
 }
 
@@ -35,8 +66,11 @@ freerange(void *pa_start, void *pa_end)
 {
   char *p;
   p = (char*)PGROUNDUP((uint64)pa_start);
-  for(; p + PGSIZE <= (char*)pa_end; p += PGSIZE)
+  for(; p + PGSIZE <= (char*)pa_end; p += PGSIZE){
+    cnt_s.cnt[(uint64)p / PGSIZE] = 1;
+    //初始化cnt数组
     kfree(p);
+  }
 }
 
 // Free the page of physical memory pointed at by v,
@@ -51,15 +85,23 @@ kfree(void *pa)
   if(((uint64)pa % PGSIZE) != 0 || (char*)pa < end || (uint64)pa >= PHYSTOP)
     panic("kfree");
 
-  // Fill with junk to catch dangling refs.
-  memset(pa, 1, PGSIZE);
+  acquire(&cnt_s.lock);
+  if(--cnt_s.cnt[(uint64)pa / PGSIZE] == 0) {
+    //为0，释放页面
+    release(&cnt_s.lock);
 
-  r = (struct run*)pa;
+    // Fill with junk to catch dangling refs.
+    memset(pa, 1, PGSIZE);
 
-  acquire(&kmem.lock);
-  r->next = kmem.freelist;
-  kmem.freelist = r;
-  release(&kmem.lock);
+    r = (struct run*)pa;
+
+    acquire(&kmem.lock);
+    r->next = kmem.freelist;
+    kmem.freelist = r;
+    release(&kmem.lock);
+  }
+  else release(&cnt_s.lock);
+  
 }
 
 // Allocate one 4096-byte page of physical memory.
@@ -72,8 +114,12 @@ kalloc(void)
 
   acquire(&kmem.lock);
   r = kmem.freelist;
-  if(r)
+  if(r){
     kmem.freelist = r->next;
+    acquire(&cnt_s.lock);
+    cnt_s.cnt[(uint64)r / PGSIZE] = 1;  // 将引用计数初始化为1
+    release(&cnt_s.lock);
+  }
   release(&kmem.lock);
 
   if(r)

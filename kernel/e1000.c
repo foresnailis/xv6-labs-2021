@@ -102,7 +102,31 @@ e1000_transmit(struct mbuf *m)
   // the TX descriptor ring so that the e1000 sends it. Stash
   // a pointer so that it can be freed after sending.
   //
+  acquire(&e1000_lock);
+	
   
+  uint32 tx_index = regs[E1000_TDT];
+
+  // 保证当前描述符已经被释放，若没有，中断
+  uint32 flag=tx_ring[tx_index].status & E1000_TXD_STAT_DD;
+  if (flag == 0){
+    release(&e1000_lock);
+    return -1;
+  }
+  
+  if (tx_mbufs[tx_index]){
+    mbuffree(tx_mbufs[tx_index]);
+  }
+  
+  // 设置描述符
+  tx_mbufs[tx_index] = m;  
+  tx_ring[tx_index].addr = (uint64)m->head;
+  tx_ring[tx_index].length = m->len;
+  tx_ring[tx_index].cmd = E1000_TXD_CMD_EOP | E1000_TXD_CMD_RS; 
+  
+  regs[E1000_TDT] = (tx_index + 1) % TX_RING_SIZE;
+
+  release(&e1000_lock);
   return 0;
 }
 
@@ -115,6 +139,29 @@ e1000_recv(void)
   // Check for packets that have arrived from the e1000
   // Create and deliver an mbuf for each packet (using net_rx()).
   //
+  
+   while (1) {
+  	// 由于E1000从以太网接收到每个包时，它首先将包DMA到下一个描述符指向的mbuf，故需要+1。
+    uint32 rx_index = (regs[E1000_RDT] + 1) % RX_RING_SIZE;
+
+    // 保证当前描述符已经被释放，若没有，中断
+    uint32 flag=rx_ring[rx_index].status & E1000_RXD_STAT_DD;
+    if (flag == 0)
+      return ;
+    
+    // 在发送之前，设置好缓冲区的长度
+    rx_mbufs[rx_index]->len = rx_ring[rx_index].length;
+    net_rx(rx_mbufs[rx_index]);
+		
+    //设置好描述符指向下一次发送的buffer，下次网卡直接通过DMA传入数据
+    rx_mbufs[rx_index] = mbufalloc(0);
+    rx_ring[rx_index].addr = (uint64)rx_mbufs[rx_index]->head;
+    rx_ring[rx_index].status = 0;
+		
+    // 设置到当前位置
+    regs[E1000_RDT] = rx_index; 
+  }
+  
 }
 
 void

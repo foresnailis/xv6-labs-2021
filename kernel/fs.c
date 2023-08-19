@@ -401,6 +401,36 @@ bmap(struct inode *ip, uint bn)
     return addr;
   }
 
+  bn -= NINDIRECT;
+  if(bn < NSECDIRECT) {
+    int index2 = bn % (BSIZE / sizeof(uint));  
+    int index1 = bn / (BSIZE / sizeof(uint));  
+
+    // 读出二级间接块
+    if((addr = ip->addrs[NDIRECT + 1]) == 0)
+      ip->addrs[NDIRECT + 1] = addr = balloc(ip->dev);
+    bp = bread(ip->dev, addr);
+    a = (uint*)bp->data;
+
+    if((addr = a[index1]) == 0) {
+      // 先修改一级块表的内容
+      a[index1] = addr = balloc(ip->dev);
+      // 注意使用事务
+      log_write(bp);
+    }
+    brelse(bp);
+
+    bp = bread(ip->dev, addr);
+    a = (uint*)bp->data;
+    if((addr = a[index2]) == 0) {
+      // 再修改二级块表的内容
+      a[index2] = addr = balloc(ip->dev);
+      log_write(bp);
+    }
+    brelse(bp);
+    return addr;
+  }
+
   panic("bmap: out of range");
 }
 
@@ -430,6 +460,31 @@ itrunc(struct inode *ip)
     brelse(bp);
     bfree(ip->dev, ip->addrs[NDIRECT]);
     ip->addrs[NDIRECT] = 0;
+  }
+
+  struct buf* bp1;
+  uint* a_snd;
+  if(ip->addrs[NDIRECT + 1]) {
+    bp = bread(ip->dev, ip->addrs[NDIRECT + 1]);
+    // 读出二级块表的一级索引
+    a = (uint*)bp->data;
+    for(i = 0; i < (BSIZE / sizeof(uint)); i++) {
+
+      if(a[i]) {
+        bp1 = bread(ip->dev, a[i]);
+        // 读出二级块表的二级索引
+        a_snd = (uint*)bp1->data;
+        for(j = 0; j < (BSIZE / sizeof(uint)); j++) {
+          if(a_snd[j])
+            bfree(ip->dev, a_snd[j]);
+        }
+        brelse(bp1);
+        bfree(ip->dev, a[i]);
+      }
+    }
+    brelse(bp);
+    bfree(ip->dev, ip->addrs[NDIRECT + 1]);
+    ip->addrs[NDIRECT + 1] = 0;
   }
 
   ip->size = 0;
